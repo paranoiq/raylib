@@ -1633,6 +1633,28 @@ float GetFrameTime(void)
     return (float)CORE.Time.frame;
 }
 
+// PATCHED (raven): take `secs` the loop spent asleep waiting for events out of the
+// frame clock, so the frame after an idle wait reports its own length to animations
+// rather than the length of the wait
+void rlRavenSkipTime(double secs) { CORE.Time.previous += secs; }
+
+// PATCHED (raven): whether any input reached the callbacks since the last
+// PollInputEvents - a key, a character, a button, the wheel, the pointer, a
+// resize or a drop. The idle loop asks it after an early return from its event
+// wait, because not every wakeup is input: on Wayland the compositor's frame
+// callback for the last swap arrives the same way
+bool rlRavenInputArrived(void)
+{
+    if (CORE.Input.Keyboard.keyPressedQueueCount > 0 || CORE.Input.Keyboard.charPressedQueueCount > 0) return true;
+    for (int i = 0; i < MAX_KEYBOARD_KEYS; i++)
+        if (CORE.Input.Keyboard.currentKeyState[i] != CORE.Input.Keyboard.previousKeyState[i] || CORE.Input.Keyboard.keyRepeatInFrame[i]) return true;
+    for (int i = 0; i < MAX_MOUSE_BUTTONS; i++)
+        if (CORE.Input.Mouse.currentButtonState[i] != CORE.Input.Mouse.previousButtonState[i]) return true;
+    if (CORE.Input.Mouse.currentWheelMove.x != 0 || CORE.Input.Mouse.currentWheelMove.y != 0) return true;
+    if (CORE.Input.Mouse.currentPosition.x != CORE.Input.Mouse.previousPosition.x || CORE.Input.Mouse.currentPosition.y != CORE.Input.Mouse.previousPosition.y) return true;
+    return CORE.Window.resizedLastFrame || CORE.Window.dropFileCount > 0;
+}
+
 //----------------------------------------------------------------------------------
 // Module Functions Definition: Custom frame control
 //----------------------------------------------------------------------------------

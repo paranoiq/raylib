@@ -732,6 +732,7 @@ RLAPI void rlUnloadRenderBatch(rlRenderBatch batch);    // Unload render batch s
 RLAPI void rlDrawRenderBatch(rlRenderBatch *batch);     // Draw render batch data (Update->Draw->Reset)
 RLAPI void rlSetRenderBatchActive(rlRenderBatch *batch); // Set the active render batch for rlgl (NULL for default internal)
 RLAPI void rlDrawRenderBatchActive(void);               // Update and draw internal render batch
+RLAPI unsigned long long rlRavenFrameHash(void);        // PATCHED (raven): fingerprint of everything drawn since the last call, then reset
 RLAPI bool rlCheckRenderBatchLimit(int vCount);         // Check internal buffer overflow for a given number of vertex
 
 RLAPI void rlSetTexture(unsigned int id);               // Set current texture for render batch and check buffers limits
@@ -1118,6 +1119,24 @@ static double rlCullDistanceFar = RL_CULL_DISTANCE_FAR;
 static rlglData RLGL = { 0 };
 #endif
 
+// PATCHED (raven): a fingerprint of everything that reaches the screen - the batched
+// vertices and draw calls, the matrices and shader they are drawn with, and every state
+// or texture change that would alter the picture without moving a vertex. Two frames
+// with the same fingerprint drew the same picture, which is how raven tells that
+// nothing on screen is changing and it can stop redrawing until something does.
+static unsigned long long ravenHash = 0xcbf29ce484222325ULL;
+static void ravenFold(const void *data, size_t len)
+{
+    const unsigned char *b = (const unsigned char *)data;
+    unsigned long long h = ravenHash;
+    size_t i = 0;
+    for (; i + 4 <= len; i += 4) { unsigned int w; memcpy(&w, b + i, 4); h = (h ^ w)*0x100000001b3ULL; }
+    for (; i < len; i++) h = (h ^ b[i])*0x100000001b3ULL;
+    ravenHash = h;
+}
+static void ravenFoldInts(int a, int b, int c, int d) { int v[4] = { a, b, c, d }; ravenFold(v, sizeof(v)); }
+unsigned long long rlRavenFrameHash(void) { unsigned long long h = ravenHash; ravenHash = 0xcbf29ce484222325ULL; return h; }
+
 #if defined(GRAPHICS_API_OPENGL_ES2) && !defined(GRAPHICS_API_OPENGL_ES3)
 // VAO functions entry points
 // NOTE: VAO functionality is exposed through extensions (OES)
@@ -1398,6 +1417,7 @@ void rlOrtho(double left, double right, double bottom, double top, double znear,
 // Set the viewport area (transformation from normalized device coordinates to window coordinates)
 void rlViewport(int x, int y, int width, int height)
 {
+    ravenFoldInts(1, x, y, width); ravenFoldInts(1, height, 0, 0); // PATCHED (raven)
     glViewport(x, y, width, height);
 }
 
@@ -1954,13 +1974,13 @@ void rlSetCullFace(int mode)
 }
 
 // Enable scissor test
-void rlEnableScissorTest(void) { glEnable(GL_SCISSOR_TEST); }
+void rlEnableScissorTest(void) { ravenFoldInts(3, 1, 0, 0); glEnable(GL_SCISSOR_TEST); } // PATCHED (raven): fold
 
 // Disable scissor test
-void rlDisableScissorTest(void) { glDisable(GL_SCISSOR_TEST); }
+void rlDisableScissorTest(void) { ravenFoldInts(3, 0, 0, 0); glDisable(GL_SCISSOR_TEST); } // PATCHED (raven): fold
 
 // Scissor test
-void rlScissor(int x, int y, int width, int height) { glScissor(x, y, width, height); }
+void rlScissor(int x, int y, int width, int height) { ravenFoldInts(2, x, y, width); ravenFoldInts(2, height, 0, 0); glScissor(x, y, width, height); } // PATCHED (raven): fold
 
 // Enable wire mode
 void rlEnableWireMode(void)
@@ -2074,6 +2094,7 @@ bool rlIsStereoRenderEnabled(void)
 // Clear color buffer with color
 void rlClearColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a)
 {
+    ravenFoldInts(4, r, g, b); ravenFoldInts(4, a, 0, 0); // PATCHED (raven)
     // Color values clamp to 0.0f(0) and 1.0f(255)
     float cr = (float)r/255;
     float cg = (float)g/255;
@@ -2117,6 +2138,7 @@ void rlCheckErrors(void)
 // Set blend mode
 void rlSetBlendMode(int mode)
 {
+    ravenFoldInts(5, mode, 0, 0); // PATCHED (raven)
 #if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
     if ((RLGL.State.currentBlendMode != mode) || ((mode == RL_BLEND_CUSTOM || mode == RL_BLEND_CUSTOM_SEPARATE) && RLGL.State.glCustomBlendModeModified))
     {
@@ -2958,6 +2980,18 @@ void rlUnloadRenderBatch(rlRenderBatch batch)
 void rlDrawRenderBatch(rlRenderBatch *batch)
 {
 #if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
+    // PATCHED (raven): fold what this flush draws into the frame fingerprint
+    if (RLGL.State.vertexCounter > 0)
+    {
+        const rlVertexBuffer *vb = &batch->vertexBuffer[batch->currentBuffer];
+        ravenFoldInts(13, RLGL.State.vertexCounter, (int)RLGL.State.currentShaderId, batch->drawCounter);
+        ravenFold(vb->vertices, (size_t)RLGL.State.vertexCounter*3*sizeof(float));
+        ravenFold(vb->texcoords, (size_t)RLGL.State.vertexCounter*2*sizeof(float));
+        ravenFold(vb->colors, (size_t)RLGL.State.vertexCounter*4*sizeof(unsigned char));
+        for (int i = 0; i < batch->drawCounter; i++) ravenFoldInts(batch->draws[i].mode, batch->draws[i].vertexCount, batch->draws[i].vertexAlignment, (int)batch->draws[i].textureId);
+        ravenFold(&RLGL.State.modelview, sizeof(Matrix));
+        ravenFold(&RLGL.State.projection, sizeof(Matrix));
+    }
     // Update batch vertex buffers
     //------------------------------------------------------------------------------------------------------------
     // NOTE: If there is not vertex data, buffers doesn't need to be updated (vertexCount > 0)
@@ -3232,6 +3266,7 @@ bool rlCheckRenderBatchLimit(int vCount)
 // Convert image data to OpenGL texture (returns OpenGL valid Id)
 unsigned int rlLoadTexture(const void *data, int width, int height, int format, int mipmapCount)
 {
+    ravenFoldInts(6, width, height, format); // PATCHED (raven): a new texture may reuse a freed id
     unsigned int id = 0;
     if (!isGpuReady) { TRACELOG(RL_LOG_WARNING, "GL: GPU is not ready to load data, trying to load before InitWindow()?"); return id; }
 
@@ -3574,6 +3609,7 @@ unsigned int rlLoadTextureCubemap(const void *data, int size, int format, int mi
 // WARNING: Not possible to know safely if internal texture format is the expected one...
 void rlUpdateTexture(unsigned int id, int offsetX, int offsetY, int width, int height, int format, const void *data)
 {
+    ravenFoldInts(7, (int)id, offsetX, offsetY); ravenFoldInts(7, width, height, format); // PATCHED (raven): same quad, new pixels (an animation frame)
     glBindTexture(GL_TEXTURE_2D, id);
 
     unsigned int glInternalFormat, glFormat, glType;
@@ -3662,6 +3698,7 @@ void rlGetGlTextureFormats(int format, unsigned int *glInternalFormat, unsigned 
 // Unload texture from GPU memory
 void rlUnloadTexture(unsigned int id)
 {
+    ravenFoldInts(8, (int)id, 0, 0); // PATCHED (raven)
     glDeleteTextures(1, &id);
 }
 
@@ -4502,6 +4539,8 @@ int rlGetLocationAttrib(unsigned int id, const char *attribName)
 // Set shader value uniform
 void rlSetUniform(int locIndex, const void *value, int uniformType, int count)
 {
+    ravenFoldInts(9, locIndex, uniformType, count); // PATCHED (raven)
+    if (value != NULL && count > 0) ravenFold(value, (size_t)count*((uniformType < RL_SHADER_UNIFORM_SAMPLER2D)? 4*(1 + uniformType%4) : 4));
 #if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
     switch (uniformType)
     {
@@ -4543,6 +4582,7 @@ void rlSetVertexAttributeDefault(int locIndex, const void *value, int attribType
 // Set shader value uniform matrix
 void rlSetUniformMatrix(int locIndex, Matrix mat)
 {
+    ravenFoldInts(10, locIndex, 0, 0); ravenFold(&mat, sizeof(mat)); // PATCHED (raven)
 #if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
     glUniformMatrix4fv(locIndex, 1, false, rlMatrixToFloat(mat));
 #endif
@@ -4551,6 +4591,7 @@ void rlSetUniformMatrix(int locIndex, Matrix mat)
 // Set shader value uniform matrix
 void rlSetUniformMatrices(int locIndex, const Matrix *matrices, int count)
 {
+    ravenFoldInts(11, locIndex, count, 0); if (matrices != NULL && count > 0) ravenFold(matrices, (size_t)count*sizeof(Matrix)); // PATCHED (raven)
 #if defined(GRAPHICS_API_OPENGL_33)
     glUniformMatrix4fv(locIndex, count, true, (const float *)matrices);
 #elif defined(GRAPHICS_API_OPENGL_ES2)
@@ -4563,6 +4604,7 @@ void rlSetUniformMatrices(int locIndex, const Matrix *matrices, int count)
 // Set shader value uniform sampler
 void rlSetUniformSampler(int locIndex, unsigned int textureId)
 {
+    ravenFoldInts(12, locIndex, (int)textureId, 0); // PATCHED (raven)
 #if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
     // Check if texture is already active
     for (int i = 0; i < RL_DEFAULT_BATCH_MAX_TEXTURE_UNITS; i++)
