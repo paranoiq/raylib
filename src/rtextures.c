@@ -575,10 +575,13 @@ Image LoadImageFromMemory(const char *fileType, const unsigned char *fileData, i
         image.data = rl_load_astc_from_memory(fileData, dataSize, &image.width, &image.height, &image.format, &image.mipmaps);
     }
 #endif
-    else TRACELOG(LOG_WARNING, "IMAGE: Data format not supported");
+    // PATCHED (raven): both demoted from LOG_WARNING to LOG_DEBUG. raven offers
+    // raylib a buffer as one attempt among several and reports a decode failure
+    // itself, so these two lines were only noise, one pair per declined file.
+    else TRACELOG(LOG_DEBUG, "IMAGE: Data format not supported");
 
     if (image.data != NULL) TRACELOG(LOG_INFO, "IMAGE: Data loaded successfully (%ix%i | %s | %i mipmaps)", image.width, image.height, rlGetPixelFormatName(image.format), image.mipmaps);
-    else TRACELOG(LOG_WARNING, "IMAGE: Failed to load image data");
+    else TRACELOG(LOG_DEBUG, "IMAGE: Failed to load image data");
 
     return image;
 }
