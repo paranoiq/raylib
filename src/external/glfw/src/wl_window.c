@@ -642,8 +642,16 @@ static const struct wl_surface_listener surfaceListener =
     surfaceHandleLeave
 };
 
+// PATCHED (raven): keep the session awake outside fullscreen too. GLFW holds
+// an idle inhibitor only while a window is fullscreen; raven's slideshow wants
+// one in a plain window as well. The flag is OR-ed into every request GLFW
+// makes, so leaving fullscreen does not drop an inhibitor raven still wants.
+static GLFWbool ravenKeepAwake = GLFW_FALSE;
+
 static void setIdleInhibitor(_GLFWwindow* window, GLFWbool enable)
 {
+    if (ravenKeepAwake)
+        enable = GLFW_TRUE;
     if (enable && !window->wl.idleInhibitor && _glfw.wl.idleInhibitManager)
     {
         window->wl.idleInhibitor =
@@ -660,6 +668,77 @@ static void setIdleInhibitor(_GLFWwindow* window, GLFWbool enable)
     }
 }
 
+// PATCHED (raven): the switch for `ravenKeepAwake` above. No-op off Wayland.
+GLFWAPI void glfwWaylandKeepAwake(GLFWwindow* handle, int enable)
+{
+    _GLFWwindow* window = (_GLFWwindow*) handle;
+
+    if (_glfw.platform.platformID != GLFW_PLATFORM_WAYLAND || !window)
+        return;
+    ravenKeepAwake = enable ? GLFW_TRUE : GLFW_FALSE;
+    setIdleInhibitor(window, window->monitor != NULL);
+}
+
+// PATCHED (raven): fullscreen without naming an output.
+//
+// A Wayland client is never told which output its surface is on - that is the
+// compositor's business by design - so GLFW has to name one, and it names
+// whichever monitor the caller passed. On a multi-monitor desktop that yanks
+// the window to another display when it goes fullscreen. `xdg_toplevel
+// .set_fullscreen(NULL)` instead means "fullscreen where I already am", which
+// is what every other Wayland app does; this flag switches the four request
+// sites over to it while leaving GLFW's own monitor bookkeeping untouched, so
+// leaving fullscreen still restores normally.
+static GLFWbool ravenFullscreenHere = GLFW_FALSE;
+
+GLFWAPI void glfwWaylandFullscreenHere(int enable)
+{
+    ravenFullscreenHere = enable ? GLFW_TRUE : GLFW_FALSE;
+}
+
+static struct wl_output* ravenFullscreenOutput(_GLFWwindow* window)
+{
+    if (ravenFullscreenHere)
+        return NULL;
+    return window->monitor->wl.output;
+}
+
+// PATCHED (raven): which output the surface is actually ON.
+//
+// The companion to the patch above, and the correction to its first sentence:
+// a Wayland client IS told which outputs its surface covers, by
+// `wl_surface.enter`/`leave` - what it is never told is where that output sits
+// in any global coordinate space, which is the part `set_fullscreen(NULL)`
+// works around. GLFW already records the enters, because it needs them for the
+// buffer scale (`surfaceHandleEnter` fills `window->wl.outputScales`); it just
+// never exposes which monitor they came from. Without this, a caller wanting
+// the window's display has only the CONTENT SCALE to go on, and two outputs
+// left at scale 1 - a 4K 27" and a 1440p 27", say - are indistinguishable, so
+// the density of whichever was advertised first is applied to both.
+//
+// Returns the FIRST output entered. A surface straddling two displays really is
+// on both and Wayland offers no ranking between them; the compositor's own
+// answer to "which one" is the buffer scale, which GLFW already takes as the
+// maximum. Returns NULL when the platform is not Wayland, or before the first
+// `enter` has arrived (the window has not been shown yet) - callers fall back.
+GLFWAPI GLFWmonitor* glfwWaylandWindowMonitor(GLFWwindow* handle)
+{
+    _GLFWwindow* window = (_GLFWwindow*) handle;
+
+    if (_glfw.platform.platformID != GLFW_PLATFORM_WAYLAND)
+        return NULL;
+    if (!window || window->wl.outputScaleCount == 0)
+        return NULL;
+
+    struct wl_output* output = window->wl.outputScales[0].output;
+    for (int i = 0;  i < _glfw.monitorCount;  i++)
+    {
+        if (_glfw.monitors[i]->wl.output == output)
+            return (GLFWmonitor*) _glfw.monitors[i];
+    }
+    return NULL;
+}
+
 // Make the specified window and its video mode active on its monitor
 //
 static void acquireMonitor(_GLFWwindow* window)
@@ -667,12 +746,12 @@ static void acquireMonitor(_GLFWwindow* window)
     if (window->wl.libdecor.frame)
     {
         libdecor_frame_set_fullscreen(window->wl.libdecor.frame,
-                                      window->monitor->wl.output);
+                                      ravenFullscreenOutput(window));
     }
     else if (window->wl.xdg.toplevel)
     {
         xdg_toplevel_set_fullscreen(window->wl.xdg.toplevel,
-                                    window->monitor->wl.output);
+                                    ravenFullscreenOutput(window));
     }
 
     setIdleInhibitor(window, GLFW_TRUE);
@@ -1020,7 +1099,7 @@ static GLFWbool createLibdecorFrame(_GLFWwindow* window)
     if (window->monitor)
     {
         libdecor_frame_set_fullscreen(window->wl.libdecor.frame,
-                                      window->monitor->wl.output);
+                                      ravenFullscreenOutput(window)); // PATCHED (raven)
         setIdleInhibitor(window, GLFW_TRUE);
     }
     else
@@ -1112,7 +1191,7 @@ static GLFWbool createXdgShellObjects(_GLFWwindow* window)
 
     if (window->monitor)
     {
-        xdg_toplevel_set_fullscreen(window->wl.xdg.toplevel, window->monitor->wl.output);
+        xdg_toplevel_set_fullscreen(window->wl.xdg.toplevel, ravenFullscreenOutput(window)); // PATCHED (raven)
         setIdleInhibitor(window, GLFW_TRUE);
     }
     else
