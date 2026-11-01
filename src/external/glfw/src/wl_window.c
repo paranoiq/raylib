@@ -3397,8 +3397,14 @@ static void dataSourceHandleSend(void* userData,
                                  int fd)
 {
     // Ignore it if this is an outdated or invalid request
+    // PATCHED (raven): accept every text mimetype we offer, so the
+    // Mutter<->XWayland clipboard bridge (and picky clients) can fetch.
     if (_glfw.wl.selectionSource != source ||
-        strcmp(mimeType, "text/plain;charset=utf-8") != 0)
+        (strcmp(mimeType, "text/plain;charset=utf-8") != 0 &&
+         strcmp(mimeType, "text/plain") != 0 &&
+         strcmp(mimeType, "UTF8_STRING") != 0 &&
+         strcmp(mimeType, "STRING") != 0 &&
+         strcmp(mimeType, "TEXT") != 0))
     {
         close(fd);
         return;
@@ -3476,6 +3482,13 @@ void _glfwSetClipboardStringWayland(const char* string)
                                 &dataSourceListener,
                                 NULL);
     wl_data_source_offer(_glfw.wl.selectionSource, "text/plain;charset=utf-8");
+    // PATCHED (raven): also offer the classic X11 text targets - without them
+    // some compositors' XWayland bridges never expose the selection to X11
+    // apps (observed: GNOME/Mutter -> Sublime Text saw nothing).
+    wl_data_source_offer(_glfw.wl.selectionSource, "text/plain");
+    wl_data_source_offer(_glfw.wl.selectionSource, "UTF8_STRING");
+    wl_data_source_offer(_glfw.wl.selectionSource, "STRING");
+    wl_data_source_offer(_glfw.wl.selectionSource, "TEXT");
     wl_data_device_set_selection(_glfw.wl.dataDevice,
                                  _glfw.wl.selectionSource,
                                  _glfw.wl.serial);
