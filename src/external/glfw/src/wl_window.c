@@ -1208,7 +1208,13 @@ static GLFWbool createNativeSurface(_GLFWwindow* window,
     window->wl.height = wndconfig->height;
     window->wl.fbWidth = wndconfig->width;
     window->wl.fbHeight = wndconfig->height;
-    window->wl.appId = _glfw_strdup(wndconfig->wl.appId);
+    // PATCHED (raven): fall back to the window title as the Wayland app_id when
+    // none was set via GLFW_WAYLAND_APP_ID, mirroring the X11 WM_CLASS fallback
+    // (x11_window.c). Without an app_id GNOME cannot match the window to its
+    // .desktop file (StartupWMClass=raven), so the taskbar/dash shows no icon.
+    window->wl.appId = _glfw_strdup(
+        (wndconfig->wl.appId && strlen(wndconfig->wl.appId)) ? wndconfig->wl.appId :
+        (window->title && strlen(window->title)) ? window->title : "glfw-application");
 
     window->wl.bufferScale = 1;
     window->wl.scalingNumerator = 120;
