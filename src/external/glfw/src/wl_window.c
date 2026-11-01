@@ -2210,6 +2210,16 @@ static void dataDeviceHandleEnter(void* userData,
                 _glfw.wl.dragSerial = serial;
 
                 wl_data_offer_accept(offer, serial, "text/uri-list");
+
+                // PATCHED (raven): a drag over the window moves the cursor
+                // position, as XDND does on X11, so a drop lands where the
+                // pointer is (stock GLFW leaves the position from before).
+                if (window->cursorMode != GLFW_CURSOR_DISABLED)
+                {
+                    window->wl.cursorPosX = wl_fixed_to_double(x);
+                    window->wl.cursorPosY = wl_fixed_to_double(y);
+                    _glfwInputCursorPos(window, window->wl.cursorPosX, window->wl.cursorPosY);
+                }
             }
         }
     }
@@ -2241,6 +2251,14 @@ static void dataDeviceHandleMotion(void* userData,
                                    wl_fixed_t x,
                                    wl_fixed_t y)
 {
+    // PATCHED (raven): the cursor follows the drag (see dataDeviceHandleEnter).
+    _GLFWwindow* window = _glfw.wl.dragFocus;
+    if (window && window->cursorMode != GLFW_CURSOR_DISABLED)
+    {
+        window->wl.cursorPosX = wl_fixed_to_double(x);
+        window->wl.cursorPosY = wl_fixed_to_double(y);
+        _glfwInputCursorPos(window, window->wl.cursorPosX, window->wl.cursorPosY);
+    }
 }
 
 static void dataDeviceHandleDrop(void* userData,
