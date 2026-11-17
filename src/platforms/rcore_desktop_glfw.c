@@ -1456,6 +1456,15 @@ static void DeallocateWrapper(void *block, void *user)
 }
 
 // Initialize platform: graphics, inputs and more
+// PATCHED (raven): the colour depth of the window's surface. InitPlatform
+// resets GLFW's window hints just before it creates the window, so a caller's
+// own GLFW_RED_BITS and the rest never reach it; this survives the reset.
+// 0 (the default) leaves GLFW's own 8 bits a channel. 10 asks for 10 bits a
+// channel and 2 of alpha, the surface an HDR10 (PQ) window is drawn into.
+// Call before InitWindow.
+static int ravenColorBits = 0;
+void rlRavenSetColorBits(int bits) { ravenColorBits = bits; }
+
 int InitPlatform(void)
 {
     glfwSetErrorCallback(ErrorCallback);
@@ -1479,6 +1488,14 @@ int InitPlatform(void)
     // Initialize graphic device: display/window and graphic context
     //----------------------------------------------------------------------------
     glfwDefaultWindowHints();                       // Set default windows hints
+    // PATCHED (raven): see rlRavenSetColorBits above.
+    if (ravenColorBits > 0)
+    {
+        glfwWindowHint(GLFW_RED_BITS, ravenColorBits);
+        glfwWindowHint(GLFW_GREEN_BITS, ravenColorBits);
+        glfwWindowHint(GLFW_BLUE_BITS, ravenColorBits);
+        glfwWindowHint(GLFW_ALPHA_BITS, (ravenColorBits == 10)? 2 : ravenColorBits);
+    }
     //glfwWindowHint(GLFW_RED_BITS, 8);             // Framebuffer red color component bits
     //glfwWindowHint(GLFW_GREEN_BITS, 8);           // Framebuffer green color component bits
     //glfwWindowHint(GLFW_BLUE_BITS, 8);            // Framebuffer blue color component bits
