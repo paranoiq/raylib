@@ -265,6 +265,52 @@ static void sendEventToWM(_GLFWwindow* window, Atom type,
                &event);
 }
 
+// PATCHED (raven): the X11 half of glfwRavenBeginMove (window.c). The window
+// manager does the move or resize on _NET_WM_MOVERESIZE (EWMH), once the
+// pointer grab X gave us with the press is let go, and shows its window menu on
+// _GTK_SHOW_WINDOW_MENU, which Mutter, KWin and the other GTK-aware window
+// managers answer. Both are placed in root coordinates, so `x` and `y` go
+// unused.
+int _glfwRavenWindowOpX11(_GLFWwindow* window, int op, int edges, int x, int y)
+{
+    Window root, child;
+    int rootX, rootY, winX, winY;
+    unsigned int mask;
+    if (!XQueryPointer(_glfw.x11.display, window->x11.handle, &root, &child,
+                       &rootX, &rootY, &winX, &winY, &mask))
+        return 0;
+    XUngrabPointer(_glfw.x11.display, CurrentTime);
+    if (op == 2)
+    {
+        sendEventToWM(window, XInternAtom(_glfw.x11.display, "_GTK_SHOW_WINDOW_MENU", False),
+                      0, rootX, rootY, 0, 0);
+        XFlush(_glfw.x11.display);
+        _glfwInputMouseClick(window, GLFW_MOUSE_BUTTON_RIGHT, GLFW_RELEASE, 0);
+        return 1;
+    }
+    long direction = 8; // _NET_WM_MOVERESIZE_MOVE
+    if (op == 1)
+    {
+        switch (edges)
+        {
+            case 1 | 4: direction = 0; break; // top left
+            case 1:     direction = 1; break;
+            case 1 | 8: direction = 2; break;
+            case 8:     direction = 3; break;
+            case 2 | 8: direction = 4; break;
+            case 2:     direction = 5; break;
+            case 2 | 4: direction = 6; break;
+            case 4:     direction = 7; break;
+            default:    return 0;
+        }
+    }
+    sendEventToWM(window, XInternAtom(_glfw.x11.display, "_NET_WM_MOVERESIZE", False),
+                  rootX, rootY, direction, Button1, 1);
+    XFlush(_glfw.x11.display);
+    _glfwInputMouseClick(window, GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE, 0);
+    return 1;
+}
+
 // Updates the normal hints according to the window settings
 //
 static void updateNormalHints(_GLFWwindow* window, int width, int height)

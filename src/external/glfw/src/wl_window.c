@@ -739,6 +739,38 @@ GLFWAPI GLFWmonitor* glfwWaylandWindowMonitor(GLFWwindow* handle)
     return NULL;
 }
 
+// PATCHED (raven): the Wayland half of glfwRavenBeginMove (window.c).
+//
+// A Wayland client cannot place its own window: it asks the compositor to
+// start an interactive move or resize, naming the button press that began it,
+// and the compositor then owns the pointer until the button is let go. GLFW
+// does exactly this for its fallback decorations (`handleFallbackDecoration
+// Button`) but only for presses on their own subsurfaces, and libdecor does it
+// inside its plugins; neither is reachable for a press on the window itself.
+// This takes the serial of the last press on any surface of ours
+// (`ravenPressSerial`, recorded in `pointerHandleButton`) and makes the same
+// requests. Nothing is sent without a toplevel (a libdecor frame owns it) or
+// before the first press.
+static uint32_t ravenPressSerial = 0;
+
+int _glfwRavenWindowOpWayland(_GLFWwindow* window, int op, int edges, int x, int y)
+{
+    if (!window->wl.xdg.toplevel || !_glfw.wl.seat || ravenPressSerial == 0)
+        return 0;
+    if (op == 2)
+    {
+        xdg_toplevel_show_window_menu(window->wl.xdg.toplevel, _glfw.wl.seat, ravenPressSerial, x, y);
+        _glfwInputMouseClick(window, GLFW_MOUSE_BUTTON_RIGHT, GLFW_RELEASE, _glfw.wl.xkb.modifiers);
+        return 1;
+    }
+    if (op == 1)
+        xdg_toplevel_resize(window->wl.xdg.toplevel, _glfw.wl.seat, ravenPressSerial, (uint32_t) edges);
+    else
+        xdg_toplevel_move(window->wl.xdg.toplevel, _glfw.wl.seat, ravenPressSerial);
+    _glfwInputMouseClick(window, GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE, _glfw.wl.xkb.modifiers);
+    return 1;
+}
+
 // Make the specified window and its video mode active on its monitor
 //
 static void acquireMonitor(_GLFWwindow* window)
@@ -1782,6 +1814,8 @@ static void pointerHandleButton(void* userData,
 
     const int button = buttonID - BTN_LEFT;
     const int action = (state == WL_POINTER_BUTTON_STATE_PRESSED);
+    if (action == GLFW_PRESS)
+        ravenPressSerial = serial; // PATCHED (raven): see _glfwRavenWindowOpWayland
 
     _GLFWwindow* window = wl_surface_get_user_data(_glfw.wl.pointerSurface);
     if (window->wl.fallback.decorations)

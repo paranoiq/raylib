@@ -62,6 +62,36 @@ static DWORD getWindowStyle(const _GLFWwindow* window)
     return style;
 }
 
+// PATCHED (raven): the Windows half of glfwRavenBeginMove (window.c). A press
+// handed back to the system as one on the caption starts Windows' own move
+// loop, which returns when the button is let go, so the button is released
+// before it. Resizing is NOT offered: the same trick on a border needs a
+// sizing frame (WS_THICKFRAME), which an undecorated GLFW window has not got,
+// so it returns 0 and the caller resizes the window itself. The window menu is
+// the system menu, run where the pointer is.
+int _glfwRavenWindowOpWin32(_GLFWwindow* window, int op, int edges, int x, int y)
+{
+    POINT pt;
+    if (op == 1 || !GetCursorPos(&pt))
+        return 0;
+    if (op == 2)
+    {
+        HMENU menu = GetSystemMenu(window->win32.handle, FALSE);
+        if (!menu)
+            return 0;
+        _glfwInputMouseClick(window, GLFW_MOUSE_BUTTON_RIGHT, GLFW_RELEASE, 0);
+        const int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                                       pt.x, pt.y, 0, window->win32.handle, NULL);
+        if (cmd)
+            PostMessageW(window->win32.handle, WM_SYSCOMMAND, (WPARAM) cmd, 0);
+        return 1;
+    }
+    ReleaseCapture();
+    _glfwInputMouseClick(window, GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE, 0);
+    SendMessageW(window->win32.handle, WM_NCLBUTTONDOWN, HTCAPTION, MAKELPARAM(pt.x, pt.y));
+    return 1;
+}
+
 // Returns the extended window style for the specified window
 //
 static DWORD getWindowExStyle(const _GLFWwindow* window)

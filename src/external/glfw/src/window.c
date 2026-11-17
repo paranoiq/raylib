@@ -1196,3 +1196,65 @@ GLFWAPI void glfwPostEmptyEvent(void)
     _glfw.platform.postEmptyEvent();
 }
 
+
+// PATCHED (raven): an undecorated window moved, resized and given its window
+// menu by the application's own title bar.
+//
+// Only the window system can do these well: it snaps and tiles a window it is
+// moving, and on Wayland nothing else can do them at all, a client never being
+// told where its window is. So each call hands the button press being held
+// over to it, through each platform's own request (`_glfwRavenWindowOp...`).
+// The window system then takes the release, which the window never sees, so
+// each also releases the button, or GLFW would go on reporting it held and the
+// next click would be lost. Each returns 1 when the request was made, 0 when
+// the platform cannot make it (see each one), for the caller to do without.
+#if defined(_GLFW_WAYLAND)
+int _glfwRavenWindowOpWayland(_GLFWwindow* window, int op, int edges, int x, int y);
+#endif
+#if defined(_GLFW_X11)
+int _glfwRavenWindowOpX11(_GLFWwindow* window, int op, int edges, int x, int y);
+#endif
+#if defined(_GLFW_WIN32)
+int _glfwRavenWindowOpWin32(_GLFWwindow* window, int op, int edges, int x, int y);
+#endif
+
+static int ravenWindowOp(GLFWwindow* handle, int op, int edges, int x, int y)
+{
+    _GLFWwindow* window = (_GLFWwindow*) handle;
+    _GLFW_REQUIRE_INIT_OR_RETURN(0);
+    if (!window)
+        return 0;
+    switch (_glfw.platform.platformID)
+    {
+#if defined(_GLFW_WAYLAND)
+        case GLFW_PLATFORM_WAYLAND: return _glfwRavenWindowOpWayland(window, op, edges, x, y);
+#endif
+#if defined(_GLFW_X11)
+        case GLFW_PLATFORM_X11: return _glfwRavenWindowOpX11(window, op, edges, x, y);
+#endif
+#if defined(_GLFW_WIN32)
+        case GLFW_PLATFORM_WIN32: return _glfwRavenWindowOpWin32(window, op, edges, x, y);
+#endif
+        default: return 0;
+    }
+}
+
+// Begins an interactive move, for a press on the window's own title bar.
+GLFWAPI int glfwRavenBeginMove(GLFWwindow* handle)
+{
+    return ravenWindowOp(handle, 0, 0, 0, 0);
+}
+
+// Begins an interactive resize from `edges`: 1 top, 2 bottom, 4 left, 8 right,
+// OR-ed for a corner (Wayland's `xdg_toplevel.resize_edge`).
+GLFWAPI int glfwRavenBeginResize(GLFWwindow* handle, int edges)
+{
+    return ravenWindowOp(handle, 1, edges, 0, 0);
+}
+
+// Opens the window system's window menu at (x, y) in window coordinates, for a
+// right-click on the title bar.
+GLFWAPI int glfwRavenShowWindowMenu(GLFWwindow* handle, int x, int y)
+{
+    return ravenWindowOp(handle, 2, 0, x, y);
+}
