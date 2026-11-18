@@ -60,6 +60,12 @@ static int findPixelFormatAttribValueWGL(const int* attribs,
 #define FIND_ATTRIB_VALUE(a) \
     findPixelFormatAttribValueWGL(attribs, attribCount, values, a)
 
+// PATCHED (raven): see glfwRavenFloatBuffer (window.c).
+extern int _glfwRavenFloatBuffer;
+#ifndef WGL_TYPE_RGBA_FLOAT_ARB
+#define WGL_TYPE_RGBA_FLOAT_ARB 0x21a0
+#endif
+
 // Return a list of available and usable framebuffer configs
 //
 static int choosePixelFormatWGL(_GLFWwindow* window,
@@ -71,6 +77,9 @@ static int choosePixelFormatWGL(_GLFWwindow* window,
     int i, pixelFormat, nativeCount, usableCount = 0, attribCount = 0;
     int attribs[40];
     int values[sizeof(attribs) / sizeof(attribs[0])];
+    // PATCHED (raven): which usable configs are half float, and how many.
+    int* ravenFloat = NULL;
+    int ravenFloatCount = 0;
 
     nativeCount = DescribePixelFormat(window->context.wgl.dc,
                                       1,
@@ -135,6 +144,7 @@ static int choosePixelFormatWGL(_GLFWwindow* window,
     }
 
     usableConfigs = _glfw_calloc(nativeCount, sizeof(_GLFWfbconfig));
+    ravenFloat = _glfw_calloc(nativeCount, sizeof(int)); // PATCHED (raven)
 
     for (i = 0;  i < nativeCount;  i++)
     {
@@ -154,6 +164,7 @@ static int choosePixelFormatWGL(_GLFWwindow* window,
                                     "WGL: Failed to retrieve pixel format attributes");
 
                 _glfw_free(usableConfigs);
+                _glfw_free(ravenFloat); // PATCHED (raven)
                 return 0;
             }
 
@@ -163,8 +174,14 @@ static int choosePixelFormatWGL(_GLFWwindow* window,
                 continue;
             }
 
-            if (FIND_ATTRIB_VALUE(WGL_PIXEL_TYPE_ARB) != WGL_TYPE_RGBA_ARB)
+            // PATCHED (raven): half-float formats too when asked for, kept
+            // apart below.
+            const int ravenType = FIND_ATTRIB_VALUE(WGL_PIXEL_TYPE_ARB);
+            if (ravenType != WGL_TYPE_RGBA_ARB &&
+                !(_glfwRavenFloatBuffer && ravenType == WGL_TYPE_RGBA_FLOAT_ARB))
                 continue;
+            ravenFloat[usableCount] = (ravenType == WGL_TYPE_RGBA_FLOAT_ARB);
+            ravenFloatCount += ravenFloat[usableCount];
 
             if (FIND_ATTRIB_VALUE(WGL_ACCELERATION_ARB) == WGL_NO_ACCELERATION_ARB)
                 continue;
@@ -220,6 +237,7 @@ static int choosePixelFormatWGL(_GLFWwindow* window,
                                     "WGL: Failed to describe pixel format");
 
                 _glfw_free(usableConfigs);
+                _glfw_free(ravenFloat); // PATCHED (raven)
                 return 0;
             }
 
@@ -268,7 +286,21 @@ static int choosePixelFormatWGL(_GLFWwindow* window,
                         "WGL: The driver does not appear to support OpenGL");
 
         _glfw_free(usableConfigs);
+        _glfw_free(ravenFloat); // PATCHED (raven)
         return 0;
+    }
+
+    // PATCHED (raven): with a half-float format on offer, only those are
+    // chosen from; with none, the ordinary ones, as unpatched.
+    if (_glfwRavenFloatBuffer && ravenFloatCount > 0)
+    {
+        int kept = 0;
+        for (i = 0;  i < usableCount;  i++)
+        {
+            if (ravenFloat[i])
+                usableConfigs[kept++] = usableConfigs[i];
+        }
+        usableCount = kept;
     }
 
     closest = _glfwChooseFBConfig(fbconfig, usableConfigs, usableCount);
@@ -278,11 +310,13 @@ static int choosePixelFormatWGL(_GLFWwindow* window,
                         "WGL: Failed to find a suitable pixel format");
 
         _glfw_free(usableConfigs);
+        _glfw_free(ravenFloat); // PATCHED (raven)
         return 0;
     }
 
     pixelFormat = (int) closest->handle;
     _glfw_free(usableConfigs);
+    _glfw_free(ravenFloat); // PATCHED (raven)
 
     return pixelFormat;
 }

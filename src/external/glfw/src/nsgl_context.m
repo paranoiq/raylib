@@ -198,6 +198,12 @@ GLFWbool _glfwCreateContextNSGL(_GLFWwindow* window,
 
     NSOpenGLPixelFormatAttribute attribs[40];
     int index = 0;
+    // PATCHED (raven): see glfwRavenFloatBuffer (window.c). Tried with half
+    // float first, then as unpatched when no such format is on offer.
+    extern int _glfwRavenFloatBuffer;
+    int ravenFloat = _glfwRavenFloatBuffer;
+ravenRetry:
+    index = 0;
 
     ADD_ATTRIB(NSOpenGLPFAAccelerated);
     ADD_ATTRIB(NSOpenGLPFAClosestPolicy);
@@ -254,6 +260,15 @@ GLFWbool _glfwCreateContextNSGL(_GLFWwindow* window,
         else if (colorBits < 15)
             colorBits = 15;
 
+        // PATCHED (raven): 64 with alpha, as Apple's EDR sample asks.
+        if (ravenFloat)
+        {
+            ADD_ATTRIB(NSOpenGLPFAColorFloat);
+            colorBits = 64;
+        }
+        else if (colorBits > 30)
+            colorBits = 24;
+
         SET_ATTRIB(NSOpenGLPFAColorSize, colorBits);
     }
 
@@ -303,6 +318,11 @@ GLFWbool _glfwCreateContextNSGL(_GLFWwindow* window,
 
     window->context.nsgl.pixelFormat =
         [[NSOpenGLPixelFormat alloc] initWithAttributes:attribs];
+    if (window->context.nsgl.pixelFormat == nil && ravenFloat) // PATCHED (raven)
+    {
+        ravenFloat = 0;
+        goto ravenRetry;
+    }
     if (window->context.nsgl.pixelFormat == nil)
     {
         _glfwInputError(GLFW_FORMAT_UNAVAILABLE,
@@ -333,6 +353,18 @@ GLFWbool _glfwCreateContextNSGL(_GLFWwindow* window,
     }
 
     [window->ns.view setWantsBestResolutionOpenGLSurface:window->ns.scaleFramebuffer];
+
+    // PATCHED (raven): a half-float surface asks for extended dynamic range,
+    // values above 1.0 shown brighter than SDR white where the screen can.
+    // Deprecated with the rest of OpenGL since macOS 10.14, still honoured.
+    if (ravenFloat &&
+        [window->ns.view respondsToSelector:@selector(setWantsExtendedDynamicRangeOpenGLSurface:)])
+    {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        [(id) window->ns.view setWantsExtendedDynamicRangeOpenGLSurface:YES];
+#pragma clang diagnostic pop
+    }
 
     [window->context.nsgl.object setView:window->ns.view];
 

@@ -1462,8 +1462,11 @@ static void DeallocateWrapper(void *block, void *user)
 // 0 (the default) leaves GLFW's own 8 bits a channel. 10 asks for 10 bits a
 // channel and 2 of alpha, the surface an HDR10 (PQ) window is drawn into.
 // Call before InitWindow.
+// 16 asks for half float a channel, the surface Windows shows as scRGB and
+// macOS as extended dynamic range (glfwRavenFloatBuffer, GLFW's window.c).
 static int ravenColorBits = 0;
 void rlRavenSetColorBits(int bits) { ravenColorBits = bits; }
+GLFWAPI void glfwRavenFloatBuffer(int on);
 
 int InitPlatform(void)
 {
@@ -1495,6 +1498,7 @@ int InitPlatform(void)
         glfwWindowHint(GLFW_GREEN_BITS, ravenColorBits);
         glfwWindowHint(GLFW_BLUE_BITS, ravenColorBits);
         glfwWindowHint(GLFW_ALPHA_BITS, (ravenColorBits == 10)? 2 : ravenColorBits);
+        glfwRavenFloatBuffer(ravenColorBits == 16);
     }
     //glfwWindowHint(GLFW_RED_BITS, 8);             // Framebuffer red color component bits
     //glfwWindowHint(GLFW_GREEN_BITS, 8);           // Framebuffer green color component bits

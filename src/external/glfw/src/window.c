@@ -1239,6 +1239,17 @@ static int ravenWindowOp(GLFWwindow* handle, int op, int edges, int x, int y)
     }
 }
 
+// PATCHED (raven): a window with half-float colour, the surface Windows
+// composes as scRGB and macOS as extended dynamic range (raven's HDR output).
+// Set before the window is created; read by the WGL and NSGL pixel format
+// choice, which fall back to the ordinary formats when the driver offers no
+// float one (raven then reads the framebuffer's type to know which it got).
+int _glfwRavenFloatBuffer = 0;
+GLFWAPI void glfwRavenFloatBuffer(int on)
+{
+    _glfwRavenFloatBuffer = on;
+}
+
 // Begins an interactive move, for a press on the window's own title bar.
 GLFWAPI int glfwRavenBeginMove(GLFWwindow* handle)
 {
